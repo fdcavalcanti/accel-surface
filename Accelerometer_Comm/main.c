@@ -1,3 +1,6 @@
+#include "stdint.h"
+#include "stdbool.h"
+#include "driverlib/gpio.h"
 
 /**
  * main.c
