@@ -8,9 +8,11 @@
 #include "driverlib/interrupt.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/i2c.h"
+#include "driverlib/timer.h"
 
-#define LED1 GPIO_PIN_0      // PF0
-#define USER_BTN GPIO_PIN_1  // PF1
+#define LED1 GPIO_PIN_0        // PF0
+#define USER_BTN GPIO_PIN_1    // PF1
+#define TIMER_100HZ GPIO_PIN_0 // PD0
 
 #define ACCEL_SDA GPIO_PIN_3 // PB3
 #define ACCEL_SCL GPIO_PIN_2 // PB2
@@ -21,31 +23,15 @@
 int8_t data;
 
 void button_interrupt(void);
+int8_t read_byte_I2C0(uint8_t addr);
+void write_byte_I2C0(uint8_t reg, uint8_t data);
 
-int8_t read_byte_I2C0(uint8_t addr){
-    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, addr);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
-    while(I2CMasterBusy(I2C0_BASE));
-
-    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, true);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
-    while(I2CMasterBusBusy(I2C0_BASE));
-
-    return I2CMasterDataGet(I2C0_BASE);
-}
-
-void write_byte_I2C0(uint8_t reg, uint8_t data){
-    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, reg);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
-    while(I2CMasterBusy(I2C0_BASE));
-
-    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, data);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
-    while(I2CMasterBusy(I2C0_BASE));
-
+void timer100hz_interrupt(void){
+    uint32_t status = TimerIntStatus(TIMER0_BASE, true);
+    if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
+        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+    }
+    TimerIntClear(TIMER0_BASE, status);
 }
 
 int main(void)
@@ -60,9 +46,13 @@ int main(void)
 
     SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C0);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_I2C0));
-
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOB));
+
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER0));
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOD));
 
     // LED 1 Configuration
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED1);
@@ -80,6 +70,16 @@ int main(void)
     GPIOPinTypeI2C(GPIO_PORTB_BASE, ACCEL_SDA);
     GPIOPinTypeI2CSCL(GPIO_PORTB_BASE, ACCEL_SCL);
     I2CMasterInitExpClk(I2C0_BASE, g_ui32SysClock, true);
+
+    // Timer 100 Hz
+    GPIOPinConfigure(GPIO_PD0_T0CCP0);
+    GPIOPinTypeTimer(GPIO_PORTD_BASE, TIMER_100HZ);
+    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 12E5);  // 100 Hz = clock * periodo
+    TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
+    TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
+    TimerEnable(TIMER0_BASE, TIMER_A);
+    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
     write_byte_I2C0(PWR_MGMT_ADDR, 0x01);
     SysCtlDelay(g_ui32SysClock/12000000);
@@ -100,4 +100,30 @@ void button_interrupt(void){
     GPIOIntClear(GPIO_PORTF_BASE,status);
 }
 
+int8_t read_byte_I2C0(uint8_t addr){
+    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
+    I2CMasterDataPut(I2C0_BASE, addr);
+    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
+    while(I2CMasterBusy(I2C0_BASE));
+
+    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, true);
+    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
+    while(I2CMasterBusBusy(I2C0_BASE));
+
+    return I2CMasterDataGet(I2C0_BASE);
+}
+
+
+void write_byte_I2C0(uint8_t reg, uint8_t data){
+    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
+    I2CMasterDataPut(I2C0_BASE, reg);
+    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
+    while(I2CMasterBusy(I2C0_BASE));
+
+    I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
+    I2CMasterDataPut(I2C0_BASE, data);
+    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
+    while(I2CMasterBusy(I2C0_BASE));
+
+}
 
