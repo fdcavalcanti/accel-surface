@@ -8,7 +8,16 @@
 #include "driverlib/interrupt.h"
 #include "driverlib/sysctl.h"
 
-#define LED1 GPIO_PIN_0
+#define LED1 GPIO_PIN_0     // PF0
+#define USER_BTN GPIO_PIN_1 // PF1
+
+void button_interrupt(void){
+    uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
+    GPIOIntClear(GPIO_PORTF_BASE,status);
+    if ((status & USER_BTN) == USER_BTN){
+        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+    }
+}
 
 int main(void)
 {
@@ -20,13 +29,20 @@ int main(void)
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOF));
 
+    // LED 1 Configuration
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED1);
+    GPIOPinWrite(GPIO_PORTF_BASE, LED1, 0x00);
+
+    // Interrupt button
+    GPIOPadConfigSet(GPIO_PORTF_BASE, USER_BTN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+    GPIOIntTypeSet(GPIO_PORTF_BASE, USER_BTN, GPIO_FALLING_EDGE);
+    GPIOIntRegister(GPIO_PORTF_BASE, button_interrupt);
+    GPIOIntEnable(GPIO_PORTF_BASE, USER_BTN);
+
+    // Accelerometer I2C
+
 
     while(1){
-        GPIOPinWrite(GPIO_PORTF_BASE, LED1, 0x01);
-        SysCtlDelay(g_ui32SysClock/3);
-        GPIOPinWrite(GPIO_PORTF_BASE, LED1, 0x00);
-        SysCtlDelay(g_ui32SysClock/3);
     }
 
 	return 0;
