@@ -21,7 +21,7 @@
 #define PWR_MGMT_ADDR 0x6B   // Power Management Register
 
 int8_t data;
-int32_t counter = 0;
+int32_t counter = 0, counter2 = 0;
 
 void button_interrupt(void);
 int8_t read_byte_I2C0(uint8_t addr);
@@ -32,6 +32,10 @@ void timer100hz_interrupt(void){
     if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
         data = read_byte_I2C0(WHO_AM_I_ADDR);
+        if (data != 0x68)
+            counter++;
+        else
+            counter2++;
     }
     TimerIntClear(TIMER0_BASE, status);
 }
@@ -71,20 +75,25 @@ int main(void)
     GPIOPinConfigure(GPIO_PB3_I2C0SDA);
     GPIOPinTypeI2C(GPIO_PORTB_BASE, ACCEL_SDA);
     GPIOPinTypeI2CSCL(GPIO_PORTB_BASE, ACCEL_SCL);
-    I2CMasterInitExpClk(I2C0_BASE, g_ui32SysClock, true);
+    I2CMasterInitExpClk(I2C0_BASE, g_ui32SysClock, false);
+    SysCtlDelay(g_ui32SysClock/12000000);
 
     // Timer 100 Hz
     GPIOPinConfigure(GPIO_PD0_T0CCP0);
     GPIOPinTypeTimer(GPIO_PORTD_BASE, TIMER_100HZ);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 12000000);  // 100 Hz = clock * periodo
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 120000000);  // 100 Hz = clock * periodo
     TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
     TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
     TimerEnable(TIMER0_BASE, TIMER_A);
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
-    write_byte_I2C0(PWR_MGMT_ADDR, 0x01);
+
+    write_byte_I2C0(PWR_MGMT_ADDR, 0x00);
     SysCtlDelay(g_ui32SysClock/12000000);
+    write_byte_I2C0(0x23, 0x88);
+    SysCtlDelay(g_ui32SysClock/12000000);
+
     data = read_byte_I2C0(WHO_AM_I_ADDR);
 
     while(1){
@@ -108,21 +117,19 @@ int8_t read_byte_I2C0(uint8_t addr){
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
     while(I2CMasterBusy(I2C0_BASE));
 
+    int i = 0;
+    do{
+        i++;
+    }while(i<100000);
+
     I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, true);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
-    while(I2CMasterBusBusy(I2C0_BASE) | I2CMasterBusy(I2C0_BASE));
+    while(I2CMasterBusy(I2C0_BASE));
 
-    int i = 1000;
-    do{
-        i--;
-    }while(i>0);
-
-    if (I2CMasterErr(I2C0_BASE) != I2C_MASTER_ERR_NONE){
-        return 0;
-    }
-
-    else
+    if (I2CMasterErr(I2C0_BASE) == I2C_MASTER_ERR_NONE)
         return I2CMasterDataGet(I2C0_BASE);
+    else
+        return 0x11;
 }
 
 
