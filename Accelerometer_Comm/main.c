@@ -21,6 +21,7 @@
 #define PWR_MGMT_ADDR 0x6B   // Power Management Register
 
 int8_t data;
+int32_t counter = 0;
 
 void button_interrupt(void);
 int8_t read_byte_I2C0(uint8_t addr);
@@ -30,6 +31,7 @@ void timer100hz_interrupt(void){
     uint32_t status = TimerIntStatus(TIMER0_BASE, true);
     if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+        data = read_byte_I2C0(WHO_AM_I_ADDR);
     }
     TimerIntClear(TIMER0_BASE, status);
 }
@@ -75,7 +77,7 @@ int main(void)
     GPIOPinConfigure(GPIO_PD0_T0CCP0);
     GPIOPinTypeTimer(GPIO_PORTD_BASE, TIMER_100HZ);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 12E5);  // 100 Hz = clock * periodo
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 12000000);  // 100 Hz = clock * periodo
     TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
     TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
     TimerEnable(TIMER0_BASE, TIMER_A);
@@ -108,9 +110,19 @@ int8_t read_byte_I2C0(uint8_t addr){
 
     I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, true);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
-    while(I2CMasterBusBusy(I2C0_BASE));
+    while(I2CMasterBusBusy(I2C0_BASE) | I2CMasterBusy(I2C0_BASE));
 
-    return I2CMasterDataGet(I2C0_BASE);
+    int i = 1000;
+    do{
+        i--;
+    }while(i>0);
+
+    if (I2CMasterErr(I2C0_BASE) != I2C_MASTER_ERR_NONE){
+        return 0;
+    }
+
+    else
+        return I2CMasterDataGet(I2C0_BASE);
 }
 
 
@@ -123,7 +135,7 @@ void write_byte_I2C0(uint8_t reg, uint8_t data){
     I2CMasterSlaveAddrSet(I2C0_BASE, ACCEL_ADDR, false);
     I2CMasterDataPut(I2C0_BASE, data);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
-    while(I2CMasterBusy(I2C0_BASE));
+    while(I2CMasterBusBusy(I2C0_BASE));
 
 }
 
