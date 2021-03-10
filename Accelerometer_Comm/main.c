@@ -28,18 +28,19 @@
 #define WHO_AM_I_ADDR 0x75   // MPU6050's register containing its address
 #define PWR_MGMT_ADDR 0x6B   // Power Management Register
 #define ACCEL_CONFIG_ADDR 0x1C  //Accelerometer Configuration (AFSEL)
+#define TEMP_ADDR 0x41      // Temeperature sensor address
+#define ACC_XOUT0 0x3B      // First register for Accelerometer X
 
-unsigned char ACCEL_ADDR[6] = {0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40};
-int16_t data=0;
-uint8_t whoami=0;
-uint8_t dataacc[6] = {0,0,0,0,0,0};
+uint8_t WHO_AM_I = 0x0;
+int8_t dataacc[6] = {0,0,0,0,0,0};
+float DATA_XYZ[3] = {0,0,0};
 
 void button_interrupt(void);
 int8_t read_byte_I2C0(uint8_t addr);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
-int16_t burst_read_I2C0(void);
 void burst_read_accel_I2C0(void);
+int16_t burst_read_I2C0(void);
 
 int main(void)
 {
@@ -82,13 +83,13 @@ int main(void)
     SysCtlDelay(g_ui32SysClock/120000);
     write_byte_I2C0(ACCEL_CONFIG_ADDR, 0x10);
     SysCtlDelay(g_ui32SysClock/120000);
-    whoami = read_byte_I2C0(WHO_AM_I_ADDR);
+    WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
 
     // Timer 100 Hz
     GPIOPinConfigure(GPIO_PD0_T0CCP0);
     GPIOPinTypeTimer(GPIO_PORTD_BASE, TIMER_100HZ);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 12000000);  // 100 Hz = clock * periodo
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 1200000);  // 100 Hz = clock * periodo
     TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
     TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
     TimerEnable(TIMER0_BASE, TIMER_A);
@@ -105,9 +106,13 @@ void timer100hz_interrupt(void){
     uint32_t status = TimerIntStatus(TIMER0_BASE, true);
     if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
-        whoami = read_byte_I2C0(0x75);
-        data = burst_read_I2C0();
+        WHO_AM_I = read_byte_I2C0(0x75);
+        //data = burst_read_I2C0();
         burst_read_accel_I2C0();
+        DATA_XYZ[0] = ((dataacc[0] << 8) + dataacc[1])/4096.0;
+        DATA_XYZ[1] = ((dataacc[2] << 8) + dataacc[3])/4096.0;
+        DATA_XYZ[2] = ((dataacc[4] << 8) + dataacc[5])/4096.0;
+
     }
 
     TimerIntClear(TIMER0_BASE, status);
@@ -120,12 +125,6 @@ int8_t read_byte_I2C0(uint8_t addr){
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
     while(!I2CMasterBusy(I2C0_BASE));
     while(I2CMasterBusy(I2C0_BASE));
-
-    // Need to wait here a bit. Issue with I2CMasterBusy().
-    /*
-    int i = 0;
-    do{ i++;}while(i<300);
-    */
 
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, true);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
@@ -161,24 +160,16 @@ void write_byte_I2C0(uint8_t reg, uint8_t data){
 int16_t burst_read_I2C0(void){
     int16_t temp = 0;
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, 0x41);
+    I2CMasterDataPut(I2C0_BASE, ACC_XOUT0);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
     while(!I2CMasterBusy(I2C0_BASE));
     while(I2CMasterBusy(I2C0_BASE));
-
-    /*int i = 0;
-    do{ i++;}while(i<300);
-    */
 
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, true);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
     while(!I2CMasterBusy(I2C0_BASE));
     while(I2CMasterBusy(I2C0_BASE));
 
-    /*
-    i = 0;
-    do{ i++;}while(i<300);
-    */
     temp = I2CMasterDataGet(I2C0_BASE);
 
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
@@ -186,16 +177,6 @@ int16_t burst_read_I2C0(void){
 
     return (temp << 8) + I2CMasterDataGet(I2C0_BASE);
 }
-
-
-void button_interrupt(void){
-    uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
-    if ((status & USER_BTN) == USER_BTN){
-        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
-    }
-    GPIOIntClear(GPIO_PORTF_BASE,status);
-}
-
 
 
 void burst_read_accel_I2C0(void){
@@ -220,7 +201,6 @@ void burst_read_accel_I2C0(void){
         dataacc[j] = I2CMasterDataGet(I2C0_BASE);
         j++;
     }
-    j++;
 
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
     while(!I2CMasterBusy(I2C0_BASE));
@@ -228,4 +208,16 @@ void burst_read_accel_I2C0(void){
 
     dataacc[j] = I2CMasterDataGet(I2C0_BASE);
 }
+
+
+
+void button_interrupt(void){
+    uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
+    if ((status & USER_BTN) == USER_BTN){
+        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+    }
+    GPIOIntClear(GPIO_PORTF_BASE,status);
+}
+
+
 
