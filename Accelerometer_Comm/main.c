@@ -32,15 +32,13 @@
 #define ACC_XOUT0 0x3B      // First register for Accelerometer X
 
 uint8_t WHO_AM_I = 0x0;
-int8_t dataacc[6] = {0,0,0,0,0,0};
 float DATA_XYZ[3] = {0,0,0};
 
 void button_interrupt(void);
 int8_t read_byte_I2C0(uint8_t addr);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
-void burst_read_accel_I2C0(void);
-int16_t burst_read_I2C0(void);
+int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n);
 
 int main(void)
 {
@@ -106,12 +104,11 @@ void timer100hz_interrupt(void){
     uint32_t status = TimerIntStatus(TIMER0_BASE, true);
     if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
-        WHO_AM_I = read_byte_I2C0(0x75);
-        //data = burst_read_I2C0();
-        burst_read_accel_I2C0();
-        DATA_XYZ[0] = ((dataacc[0] << 8) + dataacc[1])/4096.0;
-        DATA_XYZ[1] = ((dataacc[2] << 8) + dataacc[3])/4096.0;
-        DATA_XYZ[2] = ((dataacc[4] << 8) + dataacc[5])/4096.0;
+        WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
+        int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
+        DATA_XYZ[0] = ((p[0] << 8) + p[1])/4096.0;
+        DATA_XYZ[1] = ((p[2] << 8) + p[3])/4096.0;
+        DATA_XYZ[2] = ((p[4] << 8) + p[5])/4096.0;
 
     }
 
@@ -141,6 +138,7 @@ void write_byte_I2C0(uint8_t reg, uint8_t data){
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
     I2CMasterDataPut(I2C0_BASE, reg);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
+    while(!I2CMasterBusy(I2C0_BASE));
     while(I2CMasterBusy(I2C0_BASE));
 
     // Need to wait here a bit. Issue with I2CMasterBusy().
@@ -156,59 +154,49 @@ void write_byte_I2C0(uint8_t reg, uint8_t data){
 
 }
 
+int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n){
+    static int8_t temp[6] = {0}; // Initialize empty array. Need to be static or when leaving the function, it becomes garbage in memory
+    uint8_t counter = 0;
 
-int16_t burst_read_I2C0(void){
-    int16_t temp = 0;
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, ACC_XOUT0);
+    I2CMasterDataPut(I2C0_BASE, reg_start);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
     while(!I2CMasterBusy(I2C0_BASE));
     while(I2CMasterBusy(I2C0_BASE));
 
-    I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, true);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
-    while(!I2CMasterBusy(I2C0_BASE));
-    while(I2CMasterBusy(I2C0_BASE));
-
-    temp = I2CMasterDataGet(I2C0_BASE);
-
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
-    while(I2CMasterBusy(I2C0_BASE));
-
-    return (temp << 8) + I2CMasterDataGet(I2C0_BASE);
-}
-
-
-void burst_read_accel_I2C0(void){
-    int j = 0;
-    I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, 0x3B);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
-    while(!I2CMasterBusy(I2C0_BASE));
-    while(I2CMasterBusy(I2C0_BASE));
-
-    I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, true);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
-    while(!I2CMasterBusy(I2C0_BASE));
-    while(I2CMasterBusy(I2C0_BASE));
-
-    dataacc[j] = I2CMasterDataGet(I2C0_BASE);
-    j++;
-    while(j<5){
-        I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_CONT);
+    if (n == 1){
+        I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, true);
+        I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
         while(!I2CMasterBusy(I2C0_BASE));
         while(I2CMasterBusy(I2C0_BASE));
-        dataacc[j] = I2CMasterDataGet(I2C0_BASE);
-        j++;
+
+        temp[counter] = I2CMasterDataGet(I2C0_BASE);
     }
 
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
-    while(!I2CMasterBusy(I2C0_BASE));
-    while(I2CMasterBusy(I2C0_BASE));
+    else if (n > 1){
+        I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, true);
+        I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
+        while(!I2CMasterBusy(I2C0_BASE));
+        while(I2CMasterBusy(I2C0_BASE));
+        temp[counter] = I2CMasterDataGet(I2C0_BASE);
+        counter++;
 
-    dataacc[j] = I2CMasterDataGet(I2C0_BASE);
+        while(counter < n-1){
+            I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_CONT);
+            while(!I2CMasterBusy(I2C0_BASE));
+            while(I2CMasterBusy(I2C0_BASE));
+            temp[counter] = I2CMasterDataGet(I2C0_BASE);
+            counter++;
+        }
+
+        I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
+        while(!I2CMasterBusy(I2C0_BASE));
+        while(I2CMasterBusy(I2C0_BASE));
+        temp[counter] = I2CMasterDataGet(I2C0_BASE);
+    }
+
+    return temp;
 }
-
 
 
 void button_interrupt(void){
@@ -218,6 +206,3 @@ void button_interrupt(void){
     }
     GPIOIntClear(GPIO_PORTF_BASE,status);
 }
-
-
-
