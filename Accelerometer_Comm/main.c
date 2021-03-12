@@ -13,6 +13,7 @@
 #include "driverlib/i2c.h"
 #include "driverlib/timer.h"
 #include "driverlib/uart.h"
+#include "driverlib/fpu.h"
 
 /*
  * https://jspicer.net/2018/07/27/solution-for-i2c-busy-status-latency/
@@ -35,16 +36,20 @@
 #define TEMP_ADDR 0x41       // Temperature sensor address
 #define ACC_XOUT0 0x3B       // First register for Accelerometer X
 
-#define UART_RX_PIN GPIO_PIN_0
-#define UART_TX_PIN GPIO_PIN_1
+#define UART_RX_PIN GPIO_PIN_0  // UART0 Rx Pin
+#define UART_TX_PIN GPIO_PIN_1  // UART0 Tx Pin
 
 uint8_t WHO_AM_I = 0x0;
-float DATA_OUT[5];
+bool RAW_OUTPUT = false;
+bool CALIBRATION_STATUS = false;
+volatile float DATA_OUT[5];
+float ACCEL_OFFSET[3] = {0,0,0};
 
 void button_interrupt(void);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
 void send_data_uart(void);
+bool calibrate_accelerometer(void);
 int8_t read_byte_I2C0(uint8_t addr);
 int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n);
 
@@ -72,6 +77,9 @@ int main(void)
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_UART0));
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA));
+
+    FPULazyStackingEnable();
+    FPUEnable();
 
     // LED 1 Configuration
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED1);
@@ -112,9 +120,23 @@ int main(void)
     TimerLoadSet(TIMER0_BASE, TIMER_A, 12000000);  // 100 Hz = clock * periodo
     TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
     TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
-    TimerEnable(TIMER0_BASE, TIMER_A);
-    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
+    if (RAW_OUTPUT){
+        TimerEnable(TIMER0_BASE, TIMER_A);
+        TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+    }
+
+    else{
+        if (calibrate_accelerometer() == true){
+            TimerEnable(TIMER0_BASE, TIMER_A);
+            TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+        }
+        else{
+            char error_msg[] = "Calibration error";
+            GPIOPinWrite(GPIO_PORTF_BASE, LED1, LED1);
+            UARTSend((uint8_t *)error_msg, strlen(error_msg));
+        }
+    }
 
     while(1){
 
@@ -122,6 +144,36 @@ int main(void)
 
 	return 0;
 }
+
+bool calibrate_accelerometer(void){
+    uint32_t CAL_DATA_POINTS = 200, i;
+    DATA_OUT[2] = 0.0;
+    DATA_OUT[3] = 0.0;
+    DATA_OUT[4] = 0.0;
+
+    char error_msg[] = "Press button to start calibration\n";
+    UARTSend((uint8_t *)error_msg, strlen(error_msg));
+
+    do{
+        UARTSend((uint8_t *)error_msg, strlen(error_msg));
+        SysCtlDelay(120000000);
+    }while(CALIBRATION_STATUS == false);
+
+    for (i = 0; i < CAL_DATA_POINTS; i++){
+        int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
+        DATA_OUT[2] += ((p[0] << 8) + p[1])/16384.0;
+        DATA_OUT[3] += ((p[2] << 8) + p[3])/16384.0;
+        DATA_OUT[4] += ((p[4] << 8) + p[5])/16384.0;
+        SysCtlDelay(1000);
+    }
+
+    for (i = 0; i < 3; i++){
+        ACCEL_OFFSET[i] = DATA_OUT[i+2] / CAL_DATA_POINTS;
+    }
+
+    return true;
+}
+
 
 void
 UARTSend(const uint8_t *pui8Buffer, uint32_t ui32Count)
@@ -161,9 +213,9 @@ void timer100hz_interrupt(void){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
         WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
         int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
-        DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0;
-        DATA_OUT[3] = ((p[2] << 8) + p[3])/16384.0;
-        DATA_OUT[4] = ((p[4] << 8) + p[5])/16384.0;
+        DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0 - ACCEL_OFFSET[0];
+        DATA_OUT[3] = ((p[2] << 8) + p[3])/16384.0 - ACCEL_OFFSET[1];
+        DATA_OUT[4] = ((p[4] << 8) + p[5])/16384.0 - ACCEL_OFFSET[2];
     }
     send_data_uart();
     TimerIntClear(TIMER0_BASE, status);
@@ -253,6 +305,8 @@ void button_interrupt(void){
     if ((status & USER_BTN) == USER_BTN){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
         DATA_OUT[0] = 0;
+        if (CALIBRATION_STATUS == false)
+            CALIBRATION_STATUS = true;
         UARTSend((uint8_t *)header, strlen(header));
     }
     GPIOIntClear(GPIO_PORTF_BASE,status);
