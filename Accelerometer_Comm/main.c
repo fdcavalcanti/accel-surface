@@ -1,6 +1,8 @@
+#include "stdio.h"
 #include "stdint.h"
 #include "stdbool.h"
-#include "string.h"
+//#include "string.h"
+#include "math.h"
 #include "inc/tm4c1294ncpdt.h"
 #include "inc/hw_types.h"
 #include "inc/hw_memmap.h"
@@ -10,12 +12,14 @@
 #include "driverlib/sysctl.h"
 #include "driverlib/i2c.h"
 #include "driverlib/timer.h"
+#include "driverlib/uart.h"
 
 /*
  * https://jspicer.net/2018/07/27/solution-for-i2c-busy-status-latency/
  * https://e2e.ti.com/support/microcontrollers/other/f/other-microcontrollers-forum/343532/i2c-busy--and-error-flags-on-tm4c1292
  * I2CMasterBusBusy has a bug where there's a delay in setting the busy status bit.
  * Check through registers or do a complemented while loop: (!MasterBusBusy()); (MasterBusBusy());
+ * Configuration for console print: https://software-dl.ti.com/ccs/esd/documents/sdto_cgt_tips_for_using_printf.html
  */
 
 #define LED1 GPIO_PIN_0        // PF0
@@ -28,16 +32,20 @@
 #define WHO_AM_I_ADDR 0x75   // MPU6050's register containing its address
 #define PWR_MGMT_ADDR 0x6B   // Power Management Register
 #define ACCEL_CONFIG_ADDR 0x1C  //Accelerometer Configuration (AFSEL)
-#define TEMP_ADDR 0x41      // Temeperature sensor address
-#define ACC_XOUT0 0x3B      // First register for Accelerometer X
+#define TEMP_ADDR 0x41       // Temperature sensor address
+#define ACC_XOUT0 0x3B       // First register for Accelerometer X
+
+#define UART_RX_PIN GPIO_PIN_0
+#define UART_TX_PIN GPIO_PIN_1
 
 uint8_t WHO_AM_I = 0x0;
-float DATA_XYZ[3] = {0,0,0};
+float DATA_OUT[5];
 
 void button_interrupt(void);
-int8_t read_byte_I2C0(uint8_t addr);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
+void send_data_uart();
+int8_t read_byte_I2C0(uint8_t addr);
 int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n);
 
 int main(void)
@@ -60,6 +68,11 @@ int main(void)
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOD));
 
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_UART0));
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA));
+
     // LED 1 Configuration
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED1);
     GPIOPinWrite(GPIO_PORTF_BASE, LED1, 0x00);
@@ -79,15 +92,24 @@ int main(void)
     SysCtlDelay(g_ui32SysClock/120000);
     write_byte_I2C0(PWR_MGMT_ADDR, 0x00);
     SysCtlDelay(g_ui32SysClock/120000);
-    write_byte_I2C0(ACCEL_CONFIG_ADDR, 0x10);
+    write_byte_I2C0(ACCEL_CONFIG_ADDR, 0x00);
     SysCtlDelay(g_ui32SysClock/120000);
     WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
+
+    // UART1
+    GPIOPinConfigure(GPIO_PA0_U0RX);
+    GPIOPinConfigure(GPIO_PA1_U0TX);
+    GPIOPinTypeUART(GPIO_PORTA_BASE, UART_TX_PIN | UART_RX_PIN);
+    UARTClockSourceSet(UART0_BASE, UART_CLOCK_SYSTEM);
+    UARTConfigSetExpClk(UART0_BASE, g_ui32SysClock, 57600,
+                        UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE| UART_CONFIG_PAR_NONE);
+    UARTEnable(UART0_BASE);
 
     // Timer 100 Hz
     GPIOPinConfigure(GPIO_PD0_T0CCP0);
     GPIOPinTypeTimer(GPIO_PORTD_BASE, TIMER_100HZ);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 1200000);  // 100 Hz = clock * periodo
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 12000000);  // 100 Hz = clock * periodo
     TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
     TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
     TimerEnable(TIMER0_BASE, TIMER_A);
@@ -100,21 +122,56 @@ int main(void)
 	return 0;
 }
 
+void
+UARTSend(const uint8_t *pui8Buffer, uint32_t ui32Count)
+{
+    //
+    // Loop while there are more characters to send.
+    //
+    while(ui32Count--)
+    {
+        //
+        // Write the next character to the UART.
+        //
+        UARTCharPut(UART0_BASE, *pui8Buffer++);
+    }
+}
+
 void timer100hz_interrupt(void){
     uint32_t status = TimerIntStatus(TIMER0_BASE, true);
     if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
         WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
         int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
-        DATA_XYZ[0] = ((p[0] << 8) + p[1])/4096.0;
-        DATA_XYZ[1] = ((p[2] << 8) + p[3])/4096.0;
-        DATA_XYZ[2] = ((p[4] << 8) + p[5])/4096.0;
-
+        DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0;
+        DATA_OUT[3] = ((p[2] << 8) + p[3])/16384.0;
+        DATA_OUT[4] = ((p[4] << 8) + p[5])/16384.0;
     }
-
+    send_data_uart();
     TimerIntClear(TIMER0_BASE, status);
 }
 
+
+void send_data_uart(){
+    char stringout[50] = "";
+    char conversion[9] = "";
+    DATA_OUT[0]++;      // Sequence Counter
+
+    int i=0, test=0;
+    float temp=0;
+
+    for (i = 0; i < 5; i++){
+        temp = DATA_OUT[i];
+        if (ceil(temp) == temp)
+            test = snprintf(conversion, sizeof(conversion), "%.0f\t", temp);
+        else
+            test = snprintf(conversion, sizeof(conversion), "%.4f\t", temp);
+        strcat(stringout,  conversion);
+    }
+    strcat(stringout, "\n");
+    test = strlen(stringout);
+    UARTSend((uint8_t *)stringout, test);
+}
 
 int8_t read_byte_I2C0(uint8_t addr){
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
@@ -203,6 +260,8 @@ void button_interrupt(void){
     uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
     if ((status & USER_BTN) == USER_BTN){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+        printf("Hello World \n");
+        //DATA_OUT[0] = 0;
     }
     GPIOIntClear(GPIO_PORTF_BASE,status);
 }
