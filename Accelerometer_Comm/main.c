@@ -1,7 +1,7 @@
 #include "stdio.h"
 #include "stdint.h"
 #include "stdbool.h"
-//#include "string.h"
+#include "string.h"
 #include "math.h"
 #include "inc/tm4c1294ncpdt.h"
 #include "inc/hw_types.h"
@@ -44,7 +44,7 @@ float DATA_OUT[5];
 void button_interrupt(void);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
-void send_data_uart();
+void send_data_uart(void);
 int8_t read_byte_I2C0(uint8_t addr);
 int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n);
 
@@ -117,6 +117,7 @@ int main(void)
 
 
     while(1){
+
     }
 
 	return 0;
@@ -125,34 +126,15 @@ int main(void)
 void
 UARTSend(const uint8_t *pui8Buffer, uint32_t ui32Count)
 {
-    //
-    // Loop while there are more characters to send.
-    //
+
     while(ui32Count--)
     {
-        //
-        // Write the next character to the UART.
-        //
         UARTCharPut(UART0_BASE, *pui8Buffer++);
     }
 }
 
-void timer100hz_interrupt(void){
-    uint32_t status = TimerIntStatus(TIMER0_BASE, true);
-    if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
-        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
-        WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
-        int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
-        DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0;
-        DATA_OUT[3] = ((p[2] << 8) + p[3])/16384.0;
-        DATA_OUT[4] = ((p[4] << 8) + p[5])/16384.0;
-    }
-    send_data_uart();
-    TimerIntClear(TIMER0_BASE, status);
-}
 
-
-void send_data_uart(){
+void send_data_uart(void){
     char stringout[50] = "";
     char conversion[9] = "";
     DATA_OUT[0]++;      // Sequence Counter
@@ -169,9 +151,25 @@ void send_data_uart(){
         strcat(stringout,  conversion);
     }
     strcat(stringout, "\n");
-    test = strlen(stringout);
-    UARTSend((uint8_t *)stringout, test);
+    UARTSend((uint8_t *)stringout, strlen(stringout));
 }
+
+
+void timer100hz_interrupt(void){
+    uint32_t status = TimerIntStatus(TIMER0_BASE, true);
+    if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
+        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+        WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
+        int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
+        DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0;
+        DATA_OUT[3] = ((p[2] << 8) + p[3])/16384.0;
+        DATA_OUT[4] = ((p[4] << 8) + p[5])/16384.0;
+    }
+    send_data_uart();
+    TimerIntClear(TIMER0_BASE, status);
+}
+
+
 
 int8_t read_byte_I2C0(uint8_t addr){
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
@@ -198,17 +196,10 @@ void write_byte_I2C0(uint8_t reg, uint8_t data){
     while(!I2CMasterBusy(I2C0_BASE));
     while(I2CMasterBusy(I2C0_BASE));
 
-    // Need to wait here a bit. Issue with I2CMasterBusy().
-    int i = 0;
-    do{
-        i++;
-    }while(i<300);
-
     I2CMasterSlaveAddrSet(I2C0_BASE, MPU_ADDR, false);
     I2CMasterDataPut(I2C0_BASE, data);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
     while(I2CMasterBusBusy(I2C0_BASE));
-
 }
 
 int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n){
@@ -257,11 +248,12 @@ int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n){
 
 
 void button_interrupt(void){
+    char header[] = "sample\tsurface\tacc_x\tacc_y\tacc_z\n";
     uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
     if ((status & USER_BTN) == USER_BTN){
         GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
-        printf("Hello World \n");
-        //DATA_OUT[0] = 0;
+        DATA_OUT[0] = 0;
+        UARTSend((uint8_t *)header, strlen(header));
     }
     GPIOIntClear(GPIO_PORTF_BASE,status);
 }
