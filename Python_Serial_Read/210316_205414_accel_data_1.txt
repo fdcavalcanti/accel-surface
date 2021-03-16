@@ -1,0 +1,2 @@
+sample	surface	acc_x	acc_y	acc_z
+1.0000	0.0000	0.0998	-0.1567	0.0268
