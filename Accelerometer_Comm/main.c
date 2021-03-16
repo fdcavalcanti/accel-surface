@@ -23,7 +23,8 @@
  * Configuration for console print: https://software-dl.ti.com/ccs/esd/documents/sdto_cgt_tips_for_using_printf.html
  */
 
-#define LED1 GPIO_PIN_0        // PF0
+#define LED4 GPIO_PIN_0        // PF0
+#define LED3 GPIO_PIN_4        // PF4
 #define USER_BTN GPIO_PIN_1    // PF1
 #define TIMER_100HZ GPIO_PIN_0 // PD0
 
@@ -39,9 +40,9 @@
 #define UART_RX_PIN GPIO_PIN_0  // UART0 Rx Pin
 #define UART_TX_PIN GPIO_PIN_1  // UART0 Tx Pin
 
-uint8_t WHO_AM_I = 0x0;
-bool RAW_OUTPUT = false;
-bool CALIBRATION_STATUS = false;
+uint8_t WHO_AM_I = 0x0;          // I2C address of the slave.
+bool RAW_OUTPUT = false;         // Select true to output raw data from accelerometer. False will ask for calibration.
+bool CALIBRATION_STATUS = false; // Tells if the calibration process has been executed.
 volatile float DATA_OUT[5];
 float ACCEL_OFFSET[3] = {0,0,0};
 
@@ -82,8 +83,9 @@ int main(void)
     FPUEnable();
 
     // LED 1 Configuration
-    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED1);
-    GPIOPinWrite(GPIO_PORTF_BASE, LED1, 0x00);
+    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED4);
+    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED3);
+    GPIOPinWrite(GPIO_PORTF_BASE, LED4 | LED3, LED4 | LED3);
 
     // Interrupt button
     GPIOPadConfigSet(GPIO_PORTF_BASE, USER_BTN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
@@ -133,7 +135,7 @@ int main(void)
         }
         else{
             char error_msg[] = "Calibration error";
-            GPIOPinWrite(GPIO_PORTF_BASE, LED1, LED1);
+            GPIOPinWrite(GPIO_PORTF_BASE, LED4, LED4);
             UARTSend((uint8_t *)error_msg, strlen(error_msg));
         }
     }
@@ -156,8 +158,11 @@ bool calibrate_accelerometer(void){
 
     do{
         UARTSend((uint8_t *)error_msg, strlen(error_msg));
-        SysCtlDelay(120000000);
+        SysCtlDelay(120000000/2);
+        GPIOPinWrite(GPIO_PORTF_BASE, LED4 | LED3, ~GPIOPinRead(GPIO_PORTF_BASE, LED4 | LED3));
     }while(CALIBRATION_STATUS == false);
+
+    GPIOPinWrite(GPIO_PORTF_BASE, LED4 | LED3, LED4 | LED3);
 
     for (i = 0; i < CAL_DATA_POINTS; i++){
         int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
@@ -170,6 +175,8 @@ bool calibrate_accelerometer(void){
     for (i = 0; i < 3; i++){
         ACCEL_OFFSET[i] = DATA_OUT[i+2] / CAL_DATA_POINTS;
     }
+
+    GPIOPinWrite(GPIO_PORTF_BASE, LED4 | LED3, 0x00);
 
     return true;
 }
@@ -189,7 +196,11 @@ UARTSend(const uint8_t *pui8Buffer, uint32_t ui32Count)
 void send_data_uart(void){
     char stringout[50] = "";
     char conversion[9] = "";
-    DATA_OUT[0]++;      // Sequence Counter
+    if (DATA_OUT[0] == 99999)
+        DATA_OUT[0] = 0;
+    else
+        DATA_OUT[0]++;      // Sequence Counter
+
 
     int i=0, test=0;
     float temp=0;
@@ -210,7 +221,7 @@ void send_data_uart(void){
 void timer100hz_interrupt(void){
     uint32_t status = TimerIntStatus(TIMER0_BASE, true);
     if ((status & TIMER_TIMA_TIMEOUT) == TIMER_TIMA_TIMEOUT){
-        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+        GPIOPinWrite(GPIO_PORTF_BASE, LED4, ~GPIOPinRead(GPIO_PORTF_BASE, LED4));
         WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
         int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
         DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0 - ACCEL_OFFSET[0];
@@ -303,7 +314,7 @@ void button_interrupt(void){
     char header[] = "sample\tsurface\tacc_x\tacc_y\tacc_z\n";
     uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
     if ((status & USER_BTN) == USER_BTN){
-        GPIOPinWrite(GPIO_PORTF_BASE, LED1, ~GPIOPinRead(GPIO_PORTF_BASE, LED1));
+        GPIOPinWrite(GPIO_PORTF_BASE, LED4, ~GPIOPinRead(GPIO_PORTF_BASE, LED4));
         DATA_OUT[0] = 0;
         if (CALIBRATION_STATUS == false)
             CALIBRATION_STATUS = true;
