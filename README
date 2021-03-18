@@ -1,1 +1,15 @@
-This is the software for the TM4C microcontroller.
+This project was developed in a Tiva C development board, ARM Cortex M4 (TM4C1294NCPDT).
+
+There are functions that implement reading and writing to a MPU6050 IC using I2C in pins PB3 and PB2.
+There's also a interrupt on pin PF1 that triggers the calibration process and two LEDs (PF0 and PF4).
+
+After compiling and starting, the board will configure GPIOs, Interrupts, Timers and the I2C module.
+Line 122 configures the data acquisition frequency from the accelerometer. Change the number argument according to desired frequency (120000000 * period).
+After all configured, two LEDs (LED4 and LED3) will blink together, waiting for user input (interrupt trigger at falling edge) in pin PF1 (USER_BTN).
+When pressed, it will read the accelerometer for 200 data points (calibrate_accelerometer function) and use this data to average an offset for the data.
+This offset will be stored in ACCEL_OFFSET variable, for x, y and z axis.
+Data should be showing on UART after the calibration.
+
+UART Configuration:
+57600 baud, 8 data btis, 1 stop bit, no parity.
+
