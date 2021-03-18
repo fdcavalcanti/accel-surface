@@ -26,6 +26,7 @@
 #define LED4 GPIO_PIN_0        // PF0
 #define LED3 GPIO_PIN_4        // PF4
 #define USER_BTN GPIO_PIN_1    // PF1
+#define USER_BTN_2 GPIO_PIN_1  // PJ1
 #define TIMER_100HZ GPIO_PIN_0 // PD0
 
 #define MPU_SDA GPIO_PIN_3   // PB3
@@ -47,6 +48,7 @@ volatile float DATA_OUT[5];
 float ACCEL_OFFSET[3] = {0,0,0};
 
 void button_interrupt(void);
+void button2_interrupt(void);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
 void send_data_uart(void);
@@ -63,6 +65,9 @@ int main(void)
 
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOF));
+
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOJ);
+    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOJ));
 
     SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C0);
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_I2C0));
@@ -87,11 +92,17 @@ int main(void)
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, LED3);
     GPIOPinWrite(GPIO_PORTF_BASE, LED4 | LED3, LED4 | LED3);
 
-    // Interrupt button
+    // Interrupt button 1 (start, header print)
     GPIOPadConfigSet(GPIO_PORTF_BASE, USER_BTN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
     GPIOIntTypeSet(GPIO_PORTF_BASE, USER_BTN, GPIO_FALLING_EDGE);
     GPIOIntRegister(GPIO_PORTF_BASE, button_interrupt);
     GPIOIntEnable(GPIO_PORTF_BASE, USER_BTN);
+
+    // Interrupt button 2 (PUSH2 on board)
+    GPIOPadConfigSet(GPIO_PORTJ_BASE, USER_BTN_2, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+    GPIOIntTypeSet(GPIO_PORTJ_BASE, USER_BTN_2, GPIO_FALLING_EDGE);
+    GPIOIntRegister(GPIO_PORTJ_BASE, button2_interrupt);
+    GPIOIntEnable(GPIO_PORTJ_BASE, USER_BTN_2);
 
     // Accelerometer I2C
     GPIOPinConfigure(GPIO_PB2_I2C0SCL);
@@ -149,9 +160,9 @@ int main(void)
 
 bool calibrate_accelerometer(void){
     uint32_t CAL_DATA_POINTS = 200, i;
+    DATA_OUT[1] = 0.0;
     DATA_OUT[2] = 0.0;
     DATA_OUT[3] = 0.0;
-    DATA_OUT[4] = 0.0;
 
     char error_msg[] = "Press button to start calibration\n";
     UARTSend((uint8_t *)error_msg, strlen(error_msg));
@@ -166,14 +177,14 @@ bool calibrate_accelerometer(void){
 
     for (i = 0; i < CAL_DATA_POINTS; i++){
         int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
-        DATA_OUT[2] += ((p[0] << 8) + p[1])/16384.0;
-        DATA_OUT[3] += ((p[2] << 8) + p[3])/16384.0;
-        DATA_OUT[4] += ((p[4] << 8) + p[5])/16384.0;
+        DATA_OUT[1] += ((p[0] << 8) + p[1])/16384.0;
+        DATA_OUT[2] += ((p[2] << 8) + p[3])/16384.0;
+        DATA_OUT[3] += ((p[4] << 8) + p[5])/16384.0;
         SysCtlDelay(1000);
     }
 
     for (i = 0; i < 3; i++){
-        ACCEL_OFFSET[i] = DATA_OUT[i+2] / CAL_DATA_POINTS;
+        ACCEL_OFFSET[i] = DATA_OUT[i+1] / CAL_DATA_POINTS;
     }
 
     GPIOPinWrite(GPIO_PORTF_BASE, LED4 | LED3, 0x00);
@@ -201,7 +212,6 @@ void send_data_uart(void){
     else
         DATA_OUT[0]++;      // Sequence Counter
 
-
     int i=0, test=0;
     float temp=0;
 
@@ -224,9 +234,9 @@ void timer100hz_interrupt(void){
         GPIOPinWrite(GPIO_PORTF_BASE, LED4, ~GPIOPinRead(GPIO_PORTF_BASE, LED4));
         WHO_AM_I = read_byte_I2C0(WHO_AM_I_ADDR);
         int8_t *p = burst_read_sequence_I2C0(ACC_XOUT0, 6);
-        DATA_OUT[2] = ((p[0] << 8) + p[1])/16384.0 - ACCEL_OFFSET[0];
-        DATA_OUT[3] = ((p[2] << 8) + p[3])/16384.0 - ACCEL_OFFSET[1];
-        DATA_OUT[4] = ((p[4] << 8) + p[5])/16384.0 - ACCEL_OFFSET[2];
+        DATA_OUT[1] = ((p[0] << 8) + p[1])/16384.0 - ACCEL_OFFSET[0];
+        DATA_OUT[2] = ((p[2] << 8) + p[3])/16384.0 - ACCEL_OFFSET[1];
+        DATA_OUT[3] = ((p[4] << 8) + p[5])/16384.0 - ACCEL_OFFSET[2];
     }
     send_data_uart();
     TimerIntClear(TIMER0_BASE, status);
@@ -309,9 +319,18 @@ int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n){
     return temp;
 }
 
+void button2_interrupt(void){
+    uint32_t status = GPIOIntStatus(GPIO_PORTJ_BASE, true);
+    if ((status & USER_BTN_2) == USER_BTN_2){
+        DATA_OUT[4]++;
+        if (DATA_OUT[4] >= 5)
+            DATA_OUT[4] = 0;
+    }
+    GPIOIntClear(GPIO_PORTJ_BASE,status);
+}
 
 void button_interrupt(void){
-    char header[] = "sample\tsurface\tacc_x\tacc_y\tacc_z\n";
+    char header[] = "Sample\tAccX\tAccY\tAccZ\tTerrain\n";
     uint32_t status = GPIOIntStatus(GPIO_PORTF_BASE, true);
     if ((status & USER_BTN) == USER_BTN){
         GPIOPinWrite(GPIO_PORTF_BASE, LED4, ~GPIOPinRead(GPIO_PORTF_BASE, LED4));
