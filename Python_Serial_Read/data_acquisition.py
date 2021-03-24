@@ -15,7 +15,7 @@ from datetime import datetime
 
 #%% Serial Configuration
 MCU_PORT = '/dev/ttyACM0'
-MCU_BAUD = 57600
+MCU_BAUD = 115200
 
 ser = serial.Serial(None,
                     MCU_BAUD, 
@@ -43,7 +43,7 @@ def process_line(line):
     global READY_1, READY_2
     line = line.decode("utf-8")
     split = line.split("\t")[:-1]
-    if 'sample' in split:
+    if 'Sample' in split:
         READY_1 = True
         READY_2 = False
         headers.append(count)
@@ -66,7 +66,7 @@ def save_data():
         else:
             data = np.asarray(data_proc[header+1 : headers[cnt+1]])
         filename = dt + '_accel_data_' + str(cnt)  + '.txt'
-        np.savetxt(filename, data, fmt = '%.4f', header = "sample\tsurface\tacc_x\tacc_y\tacc_z", comments = '', delimiter = '\t')
+        np.savetxt(filename, data, fmt = '%.4f', header = "Sample\tAccX\tAccY\tAccZ\tTerrain", comments = '', delimiter = '\t')
 
 
 if ask1 in (['Y', 'y']):

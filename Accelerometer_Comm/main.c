@@ -52,6 +52,7 @@ void button2_interrupt(void);
 void write_byte_I2C0(uint8_t reg, uint8_t data);
 void timer100hz_interrupt(void);
 void send_data_uart(void);
+void uart0_read(void);
 bool calibrate_accelerometer(void);
 int8_t read_byte_I2C0(uint8_t addr);
 int8_t* burst_read_sequence_I2C0(uint8_t reg_start, int n);
@@ -124,13 +125,16 @@ int main(void)
     UARTClockSourceSet(UART0_BASE, UART_CLOCK_SYSTEM);
     UARTConfigSetExpClk(UART0_BASE, g_ui32SysClock, 57600,
                         UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE| UART_CONFIG_PAR_NONE);
+    UARTIntEnable(UART0_BASE, UART_INT_RX | UART_INT_RT);
+    UARTIntRegister(UART0_BASE, uart0_read);
+    IntMasterEnable();
     UARTEnable(UART0_BASE);
 
     // Timer 100 Hz
     GPIOPinConfigure(GPIO_PD0_T0CCP0);
     GPIOPinTypeTimer(GPIO_PORTD_BASE, TIMER_100HZ);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 12000000);  // 100 Hz = clock * periodo
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 1200000);  // 100 Hz = clock * periodo
     TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
     TimerIntRegister(TIMER0_BASE, TIMER_A, timer100hz_interrupt);
 
@@ -157,6 +161,34 @@ int main(void)
 
 	return 0;
 }
+
+void uart0_read(void){
+    uint32_t status = UARTIntStatus(UART0_BASE, true);
+    if (UARTCharsAvail(UART0_BASE)){
+        char data = UARTCharGetNonBlocking(UART0_BASE);
+        switch(data){
+        case '0':
+            DATA_OUT[4] = 0;
+            break;
+        case '1':
+            DATA_OUT[4] = 1;
+            break;
+        case '2':
+            DATA_OUT[4] = 2;
+            break;
+        case '3':
+            DATA_OUT[4] = 3;
+            break;
+        case '4':
+            DATA_OUT[4] = 4;
+            break;
+        default:
+            break;
+        }
+    }
+    UARTIntClear(UART0_BASE, status);
+}
+
 
 bool calibrate_accelerometer(void){
     uint32_t CAL_DATA_POINTS = 200, i;
